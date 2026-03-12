@@ -37,7 +37,6 @@ fn main() {
         } else if num_input == 2 {
             let cel = (value_input - 32.0) * (5.0 / 9.0);
             println!("{value_input}°F = {cel}°C");
-
             println!("The celsius value for {value_input}F is {cel}");
         }
     }
