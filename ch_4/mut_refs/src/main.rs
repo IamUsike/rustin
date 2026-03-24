@@ -1,6 +1,10 @@
 fn main() {
     let mut v = vec![1, 2, 3];
 
+    //  Borrow conflict example
+    // let s = &v;
+    // double_all(&mut v); // ERROR
+
     double_all(&mut v);
     let sum = sum_slice(&v);
 
