@@ -5,6 +5,9 @@ fn main() {
 
     let num = wc(&s);
     println!("wc: {num}");
+
+    let num = wc_gpt(&s);
+    println!("wc_gpt: {num}");
 }
 
 //can call the split_whitespace method and count the number of elements
@@ -34,4 +37,8 @@ fn wc(s: &str) -> u32 {
     }
 
     return ctr;
+}
+
+fn wc_gpt(s: &str) -> usize {
+    s.split_whitespace().count()
 }
