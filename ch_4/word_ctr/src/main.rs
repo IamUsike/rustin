@@ -1,7 +1,10 @@
 fn main() {
-    let s = String::from("hello world");
+    let s = String::from("helloooo    wprld");
     let num = word_ctr(&s);
-    println!("{num}");
+    println!("wrd ctr: {num}");
+
+    let num = wc(&s);
+    println!("wc: {num}");
 }
 
 //can call the split_whitespace method and count the number of elements
@@ -9,7 +12,6 @@ fn main() {
 //handles single white space between the words
 fn word_ctr(s: &str) -> u32 {
     let s = s.trim();
-    println!("{s}");
 
     if s.len() == 0 {
         return 0;
@@ -22,4 +24,14 @@ fn word_ctr(s: &str) -> u32 {
         }
     }
     return counter;
+}
+
+fn wc(s: &str) -> u32 {
+    let s = s.trim().split_whitespace();
+    let mut ctr = 0;
+    for _ in s {
+        ctr += 1;
+    }
+
+    return ctr;
 }
