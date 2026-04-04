@@ -72,8 +72,16 @@ fn main() {
         grades: vec![5.5, 6.0, 7.2, 8.3, 8.8, 9.5],
     };
 
-    println!("{:.2}", stu1.average());
-    println!("{:.2}", stu1.max());
-    println!("{:.2}", stu1.min());
-    println!("{}", stu1.grade());
+    println!("Name\tAvg\tMax\tMin\tGrade");
+
+    for stu in [&stu1, &stu2, &stu3] {
+        println!(
+            "{}\t{:.2}\t{:.2}\t{:.2}\t{}",
+            stu.name,
+            stu.average(),
+            stu.max(),
+            stu.min(),
+            stu.grade()
+        );
+    }
 }
