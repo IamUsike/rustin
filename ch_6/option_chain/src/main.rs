@@ -24,3 +24,13 @@ fn compute(a: f64, b: f64) -> Option<f64> {
         Some(i) => safe_sqrt(i),
     }
 }
+
+//improv
+
+// fn compute(a: f64, b: f64) -> Option<f64> {
+//     if let Some(div) = safe_divide(a, b) {
+//         safe_sqrt(div)
+//     } else {
+//         None
+//     }
+// }
