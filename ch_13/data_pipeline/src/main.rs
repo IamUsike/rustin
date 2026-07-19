@@ -13,7 +13,7 @@ fn parse(vec: &Vec<&str>) -> Result<Vec<Student>, String> {
 
     Err("hello".to_string())
 
-    let v1 = vec.iter().
+    let v1 = vec.iter()
 }
 
 fn build_struct(name: String, age: String, score: String) -> Student {
