@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::thread::{self, JoinHandle};
 
 // 10 print tasks with 3 workers.
 
@@ -53,7 +53,11 @@ impl TaskQueue {
 
     // push the task 
     fn submit_task(&mut self, Task){
-        let task_queue = Arc::clone(&self.task_queue); 
+        let handle = thread::spawn(move || {
+           let task_queue = Arc::clone(&self.task_queue); 
+           task_queue
+
+        })
     }
 }
 
