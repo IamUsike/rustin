@@ -412,4 +412,44 @@ The important part is:
           v
         RETRY
 */
+
 ```
+
+- so the algo basically is (t2 is just rev)
+
+```
+              START
+                |
+                v
+             try A
+                |
+          +-----+-----+
+          |           |
+       success       fail
+          |           |
+          v           |
+       hold A         |
+          |           |
+          v           |
+        try B         |
+          |           |
+     +----+----+      |
+     |         |      |
+  success     fail    |
+     |         |      |
+     v         v      |
+  hold A+B   drop A   |
+     |         |      |
+     v         |      |
+ critical      |      |
+ section       |      |
+     |         |      |
+     v         |      |
+ release       |      |
+ A+B           |      |
+     |         |      |
+     v         v      v
+    END <---- RETRY --+
+```
+
+fuck i genuinely thought abt this :Cryyy. but thennnn
