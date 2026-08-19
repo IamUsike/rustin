@@ -110,5 +110,6 @@ fn main() {
 
 /* When To use channels and when arc
 --> Channels
-- when we want everything each counter to occur without any block
+- when we want everything each counter to occur without any block, we can choose mpsc
+- Arc has less code (as in we dont have to add one more loop for the counter in the main thread)
 */
