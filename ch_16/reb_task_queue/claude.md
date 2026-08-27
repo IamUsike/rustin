@@ -224,17 +224,103 @@ fn main() {
 | Shutdown drain          | busy-spins once `shutdown` is set, because the sleep condition is bypassed entirely | still blocks normally; workers only wake when there's actually a task or actually a shutdown |
 | `submit` after shutdown | possible, and can race with the reset (bug #2)                                      | impossible — `wait_all(self)` consumes the pool                                              |
 | Task panics             | kills the worker thread; `wait_all` can panic via `.unwrap()`                       | caught per-task; worker keeps running; `wait_all` logs instead of panicking                  |
-| Drop without `wait_all` | workers leak, parked forever                                                        | same risk still exists (no `Drop` impl added) — see note below                               |
+| Drop without `wait_all` | workers leak, parked forever                                                        | `Drop` impl signals shutdown and joins as a safety net — see below                           |
 
-### One thing I deliberately _didn't_ fix: `Drop`
+### Adding `Drop` as a safety net
 
-I left out a `Drop` impl on purpose rather than bolt one on carelessly:
-`wait_all(self)` now takes ownership, and a `Drop::drop(&mut self)` can't
-consume `self` or move `workers` out of it the same way, so making the pool
-"safe to just let go out of scope" needs a slightly different shape (e.g.
-`workers: Vec<Option<JoinHandle<()>>>` so `drop` can `.take()` each handle).
-If you want that, it's a small follow-up — happy to add it, but it changes
-the field type and I didn't want to sneak that in without flagging it.
+`wait_all(self)` takes ownership, but `Drop::drop` only ever gets
+`&mut self` — it can't move `workers` out of the struct the same way. The
+fix is to change `workers` to `Vec<Option<JoinHandle<()>>>` so `drop` can
+`.take()` each handle out through a mutable reference, and to factor the
+actual shutdown logic into a private method both `wait_all` and `Drop` call:
+
+```rust
+pub struct TaskQueue {
+    shared: Arc<Shared>,
+    // Option so `drop` can .take() each handle out of a `&mut self` — you
+    // can't move a JoinHandle out of a Vec<JoinHandle<_>> through a shared
+    // reference, but you *can* swap an Option's contents for None.
+    workers: Vec<Option<JoinHandle<()>>>,
+}
+
+impl TaskQueue {
+    pub fn new(n: usize) -> Self {
+        let shared = Arc::new(Shared {
+            queue: Mutex::new(VecDeque::new()),
+            wake: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+        });
+
+        let workers = (0..n)
+            .map(|id| {
+                let shared = Arc::clone(&shared);
+                Some(thread::spawn(move || worker_loop(id, shared)))
+            })
+            .collect();
+
+        Self { shared, workers }
+    }
+
+    pub fn submit<T>(&self, task: T)
+    where
+        T: FnOnce() + Send + 'static,
+    {
+        let mut queue = self.shared.queue.lock().unwrap();
+        queue.push_back(Box::new(task));
+        self.shared.wake.notify_one();
+    }
+
+    /// Explicit, blocking shutdown — still the preferred way to end a pool,
+    /// since it lets you observe join errors. `Drop` below exists as a
+    /// safety net for the case where someone forgets to call this.
+    pub fn wait_all(mut self) {
+        self.shutdown_and_join();
+    }
+
+    /// Shared logic between `wait_all` and `Drop::drop`.
+    fn shutdown_and_join(&mut self) {
+        self.shared.shutdown.store(true, Ordering::SeqCst);
+        self.shared.wake.notify_all();
+        for handle in self.workers.iter_mut().filter_map(Option::take) {
+            if let Err(e) = handle.join() {
+                eprintln!("worker thread panicked: {e:?}");
+            }
+        }
+    }
+}
+
+impl Drop for TaskQueue {
+    fn drop(&mut self) {
+        // Runs if the pool is dropped without an explicit wait_all() —
+        // e.g. it goes out of scope, or an earlier `?` returns early.
+        // Without this, worker threads stay parked on wake.wait(...)
+        // forever: nothing else will ever set `shutdown` or notify them.
+        self.shutdown_and_join();
+    }
+}
+```
+
+Notes on this shape:
+
+- **`wait_all` and `Drop` share one path** (`shutdown_and_join`), so there's
+  only one place that can get the shutdown logic wrong. Calling
+  `wait_all()` explicitly and then letting the value drop is harmless —
+  `workers` is already empty by the time `drop` runs, so its loop does
+  nothing.
+- **`filter_map(Option::take)` instead of `.pop()`**: the earlier version's
+  `wait_all` used `while let Some(task) = self.workers.pop()`, joining in
+  reverse order. Order doesn't matter for correctness (each thread finishes
+  independently), but this reads as "drain everything in place" and works
+  from `&mut self` rather than needing ownership.
+- **Never `.unwrap()` or `panic!` inside `Drop::drop`.** If a `drop` panics
+  while the program is already unwinding from a panic elsewhere, Rust
+  aborts the whole process instead of just failing the one thread — hence
+  logging join errors rather than unwrapping them, same as before.
+- **This is a safety net, not the primary API.** `wait_all()` is still how
+  you should normally shut the pool down, since you get to decide what "a
+  worker panicked" means for your program. `Drop` firing is the "someone
+  forgot" case — silent-but-safe cleanup, not a substitute for calling it
+  yourself.
 
 ### On `tasks_pending`
 
@@ -245,4 +331,4 @@ down** (e.g. a "wait for currently queued work, then keep accepting more"
 barrier, as opposed to "shut down forever"), _that's_ a real use for a
 separate counter + condvar — but it's a distinct feature from `wait_all`
 as currently specified, worth designing on purpose rather than folding into
-the same three variables that caused the races above.ne extra simplification worth noticing: your original design used three separate pieces of shared state (`keep_awake: bool`, `tasks_pending: u32`, and the `queue` itself) to answer basically one question — "is there something for me to do (a task, or a shutdown)?" Collapsing that into a single `Shared` struct behind one mutex removes an entire class of races, because there's no longer a way for these related pieces of state to become inconsistent with each other across threads.
+the same three variables that caused the races above.
