@@ -1,5 +1,5 @@
-use core::task;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
@@ -15,6 +15,8 @@ struct TaskQueue {
     wake: Arc<Condvar>,
     //worker to keep awake
     keep_awake: Arc<Mutex<bool>>,
+    //do we need a lock on this? Cos only one thread is writing and others are reading
+    shutdown: Arc<AtomicBool>,
 }
 
 impl TaskQueue {
@@ -29,32 +31,41 @@ impl TaskQueue {
         let wake = Arc::new(Condvar::new());
         let keep_awake = Arc::new(Mutex::new(false));
 
+        let shutdown = Arc::new(AtomicBool::new(false));
+
         for i in 0..n {
             let wake = Arc::clone(&wake);
             let keep_awake = Arc::clone(&keep_awake);
             let queue = Arc::clone(&queue);
             let tasks_pending = Arc::clone(&tasks_pending);
+            let shutdown = Arc::clone(&shutdown);
 
             let worker = thread::spawn(move || {
-                let mut guard = keep_awake.lock().unwrap();
+                loop {
+                    // block here cos the thread needs to drop the guard
+                    let mut guard = keep_awake.lock().unwrap();
 
-                while !*guard {
-                    //if we dont re-assign guard here, upar vaala guard will be moved
-                    //into the loop and the guard that's checked in the while loop
-                    //will be invalid after the first iteration
-                    guard = wake.wait(guard).unwrap();
+                    while !*guard && !shutdown.load(Ordering::Relaxed) {
+                        //if we dont re-assign guard here, upar vaala guard will be moved
+                        //into the loop and the guard that's checked in the while loop
+                        //will be invalid after the first iteration
+                        guard = wake.wait(guard).unwrap();
+                        //code to be executed after getting the lock should be written
+                        //the while loop cos of spurious wakes.
+                    }
 
-                    //code to be executed after getting the lock should be written
-                    //the while loop cos of spurious wakes.
-                }
-
-                {
-                    //aquire the lock on tasks pending and pop the task
-                    let mut queue = queue.lock().unwrap();
-                    let task = queue.pop_front();
-                    //release the lock on the tasks queue immediately cos when a thread is doing
+                    let task;
+                    //block here to drop lock on queue once task is aquired
+                    {
+                        //aquire the lock on tasks pending and pop the task
+                        let mut queue = queue.lock().unwrap();
+                        task = queue.pop_front();
+                        //release the lock on the tasks queue immediately cos when a thread is doing
+                    }
                     //some task other threads should be able to access the queue
-                    drop(queue);
+                    //once we aquire a task, drop the guard. (so other threads can lock on to
+                    //the guard and get the tasks)
+                    drop(guard);
 
                     match task {
                         Some(t) => {
@@ -69,14 +80,24 @@ impl TaskQueue {
                         }
                     }
 
-                    //if no tasks left, set the wake mutex to false
-                    //no need to actually put it in a new block cos this
-                    //is the last part of the loop and the lock gets dropped once
-                    //the loop ends
-                    let tasks_pending = tasks_pending.lock().unwrap();
-                    if *tasks_pending == 0 {
-                        let mut keep_awake = keep_awake.lock().unwrap();
-                        *keep_awake = false;
+                    //block ke andar to drop the lock after this
+                    {
+                        //if no tasks left, set the wake mutex to false
+                        //no need to actually put it in a new block cos this
+                        //is the last part of the loop and the lock gets dropped once
+                        //the loop ends
+                        let tasks_pending = tasks_pending.lock().unwrap();
+                        if *tasks_pending == 0 {
+                            let mut keep_awake = keep_awake.lock().unwrap();
+                            *keep_awake = false;
+                        }
+                    }
+
+                    //tasks_pending == 0 ? Can we just use it or check quque.len?
+                    //they both are synchronized so it shouldn't really matter
+                    //check if shutdown is set to zero and then
+                    if shutdown.load(Ordering::Relaxed) && queue.lock().unwrap().is_empty() {
+                        break;
                     }
                 }
             });
@@ -90,6 +111,7 @@ impl TaskQueue {
             tasks_pending,
             wake,
             keep_awake,
+            shutdown,
         }
     }
 
@@ -129,14 +151,26 @@ impl TaskQueue {
     }
 
     //wait for all the threads to finish and then shut them down?
-    fn wait_all(&self) {}
+    fn wait_all(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        //notify all the threads to wake up() (if stuck at condvar)
+        //even if we notify_all and then the queue isnt empty, it gets stuck again?
+        self.wake.notify_all();
+        while let Some(task) = self.workers.pop() {
+            task.join().unwrap();
+        }
+    }
 }
 
 fn main() {
-    let pool = TaskQueue::new(3);
-    pool.submit(|| {
-        println!("hello");
-    });
+    let mut pool = TaskQueue::new(3);
+    for _ in 0..12 {
+        pool.submit(|| {
+            println!("hello");
+        });
+    }
+
+    pool.wait_all();
 }
 
 /* absolutes
