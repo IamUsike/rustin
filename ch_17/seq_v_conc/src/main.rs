@@ -8,7 +8,6 @@
 */
 
 use std::time::Instant;
-use tokio;
 use tokio::time::{Duration, sleep};
 
 async fn simulate_fetch(id: u32, ms: u64) {
