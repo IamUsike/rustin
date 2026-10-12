@@ -13,7 +13,7 @@ impl<'a> CsvParser<'a> {
     //if pos - 1 == /r split until pos-1
     //else split until pos
     fn new(input: &'a str) -> CsvParser<'a> {
-        let mut pos = input
+        let pos = input
             .find('\n')
             .map(|p| {
                 if p > 0 && input.as_bytes()[p - 1] == b'\r' {
@@ -31,7 +31,11 @@ impl<'a> CsvParser<'a> {
         };
 
         //prolly should write extra conditions to verify if str.len == pos then dont inc pos
-        pos += 1;
+        // pos += 1;
+
+        //doing this again cos need to be at the last index,
+        //in case of crlf, index will be at \n if it weren't gor this
+        let pos = input.find('\n').unwrap_or(input.len()) + 1;
 
         CsvParser {
             input,
@@ -64,16 +68,39 @@ impl<'a> Iterator for CsvParser<'a> {
             .find('\n')
             .unwrap_or(self.input[cur_pos..].len());
 
-        let mut row_end = match self.input.as_bytes()[cur_pos..][pos - 1] {
-            b'\r' => pos - 1,
-            _ => pos,
-        };
+        //when pos = 0, without this check, we get a
+        //subrtraction overflow error (pos - 1)
+        let mut row_end;
+        if pos > cur_pos {
+            row_end = match self.input.as_bytes()[cur_pos..][pos - 1] {
+                b'\r' => pos - 1,
+                _ => pos,
+            };
+        } else {
+            row_end = pos;
+        }
 
         //make the indices relative to self.input and not the subslice
         pos += cur_pos;
         row_end += cur_pos;
+        println!("{pos}, {row_end}");
 
-        self.pos = pos + 1; //next line starts after \n
+        //incase of empty lines
+        loop {
+            let rest = &self.input[pos..];
+
+            if let Some(r) = rest.strip_prefix("\r\n") {
+                pos = self.input.len() - r.len();
+            } else if let Some(r) = rest.strip_prefix('\n') {
+                pos = self.input.len() - r.len();
+            } else {
+                break;
+            }
+
+            println!("pos inside loop: {pos}");
+        }
+
+        self.pos = pos; //next line starts after \n
 
         Some(self.input[cur_pos..row_end].split(',').collect())
     }
@@ -84,8 +111,11 @@ fn query<'a>(csv: &'a str, column: &str, value: &str) -> Vec<HashMap<&'a str, &'
 }
 
 fn main() {
-    let mut a = CsvParser::new("a,b\n1,2");
+    let mut a = CsvParser::new("a,b\n1,2\n\n3,4\n");
     dbg!(&a);
+    dbg!(&a.next());
+    dbg!(&a.next());
+    dbg!(&a.next());
     dbg!(&a.next());
     dbg!(&a.next());
 }
