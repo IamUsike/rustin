@@ -35,7 +35,22 @@ impl<'a> CsvParser<'a> {
 
         //doing this again cos need to be at the last index,
         //in case of crlf, index will be at \n if it weren't gor this
-        let pos = input.find('\n').unwrap_or(input.len()) + 1;
+        //
+        let mut pos = input.find('\n').unwrap_or(input.len()) + 1;
+
+        //incase of empty lines after headers point position to the first
+        //non empty line
+        loop {
+            let rest = &input[pos..];
+
+            if let Some(r) = rest.strip_prefix("\r\n") {
+                pos = input.len() - r.len();
+            } else if let Some(r) = rest.strip_prefix('\n') {
+                pos = input.len() - r.len();
+            } else {
+                break;
+            }
+        }
 
         CsvParser {
             input,
@@ -108,7 +123,7 @@ fn query<'a>(csv: &'a str, column: &str, value: &str) -> Vec<HashMap<&'a str, &'
 }
 
 fn main() {
-    let mut a = CsvParser::new("a,b\r\n1,2\n3,4\r\n");
+    let mut a = CsvParser::new("a,b\r\n\r\n1,2\r\n\r\n");
     dbg!(&a);
     dbg!(&a.next());
     dbg!(&a.next());
