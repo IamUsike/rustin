@@ -71,7 +71,7 @@ impl<'a> Iterator for CsvParser<'a> {
         //when pos = 0, without this check, we get a
         //subrtraction overflow error (pos - 1)
         let mut row_end;
-        if pos > cur_pos {
+        if pos > 0 {
             row_end = match self.input.as_bytes()[cur_pos..][pos - 1] {
                 b'\r' => pos - 1,
                 _ => pos,
@@ -83,7 +83,6 @@ impl<'a> Iterator for CsvParser<'a> {
         //make the indices relative to self.input and not the subslice
         pos += cur_pos;
         row_end += cur_pos;
-        println!("{pos}, {row_end}");
 
         //incase of empty lines
         loop {
@@ -96,8 +95,6 @@ impl<'a> Iterator for CsvParser<'a> {
             } else {
                 break;
             }
-
-            println!("pos inside loop: {pos}");
         }
 
         self.pos = pos; //next line starts after \n
@@ -111,11 +108,8 @@ fn query<'a>(csv: &'a str, column: &str, value: &str) -> Vec<HashMap<&'a str, &'
 }
 
 fn main() {
-    let mut a = CsvParser::new("a,b\n1,2\n\n3,4\n");
+    let mut a = CsvParser::new("a,b\r\n1,2\n3,4\r\n");
     dbg!(&a);
-    dbg!(&a.next());
-    dbg!(&a.next());
-    dbg!(&a.next());
     dbg!(&a.next());
     dbg!(&a.next());
 }
