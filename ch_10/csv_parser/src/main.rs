@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 #[derive(Debug)]
 struct CsvParser<'a> {
@@ -63,8 +63,21 @@ impl<'a> CsvParser<'a> {
         &self.headers
     }
 
+    //read spec for impl
     fn record(&self, row: Vec<&'a str>) -> HashMap<&'a str, &'a str> {
-        todo!();
+        let mut rec = HashMap::new();
+
+        let smaller_len = if self.headers.len() > row.len() {
+            row.len()
+        } else {
+            self.headers.len()
+        };
+
+        for i in 0..smaller_len {
+            rec.insert(self.headers[i], row[i]);
+        }
+
+        rec
     }
 }
 
