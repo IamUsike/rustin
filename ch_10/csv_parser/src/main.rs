@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 #[derive(Debug)]
 struct CsvParser<'a> {
@@ -41,12 +41,16 @@ impl<'a> CsvParser<'a> {
         //incase of empty lines after headers point position to the first
         //non empty line
         loop {
-            let rest = &input[pos..];
+            if pos < input.len() {
+                let rest = &input[pos..];
 
-            if let Some(r) = rest.strip_prefix("\r\n") {
-                pos = input.len() - r.len();
-            } else if let Some(r) = rest.strip_prefix('\n') {
-                pos = input.len() - r.len();
+                if let Some(r) = rest.strip_prefix("\r\n") {
+                    pos = input.len() - r.len();
+                } else if let Some(r) = rest.strip_prefix('\n') {
+                    pos = input.len() - r.len();
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
@@ -131,15 +135,64 @@ impl<'a> Iterator for CsvParser<'a> {
     }
 }
 
+//check if the col exists and find the col num
+//split the individual rows and if row[col] == value
+//
+//for now just writing a good enough version to pass the
+//test cases. you can mod this later. LATRER
 fn query<'a>(csv: &'a str, column: &str, value: &str) -> Vec<HashMap<&'a str, &'a str>> {
-    todo!();
+    let mut res = Vec::new();
+
+    if csv.is_empty() {
+        return res;
+    }
+
+    //this is stored on the stack right ? cos we only storing refs ??
+    //but how can a vec be stored on the stack ??
+    //cos the ref itself is stored on the stack and the data it rrefers
+    //to it stored on the heap. in this case since it's all refrences
+    //no new data is cerated on the heap
+    let mut rows: Vec<&str> = csv.split('\n').collect();
+    //the above yeields the last element as an empty string
+    //if theres a lf at the end. so
+    if rows[rows.len() - 1].is_empty() {
+        rows.pop();
+    }
+
+    let headers: Vec<&str> = rows[0].split(',').collect();
+
+    //in case the col doesnt exist (header)
+    let Some(col_num) = headers.iter().position(|p| *p == column) else {
+        return res;
+    };
+
+    //dont check the header
+    for row in rows.iter().skip(1) {
+        let r: Vec<&str> = row.split(',').collect();
+        if r[col_num] == value {
+            //hows this live for as long as res.
+            //is this not if block scoped ?
+            let mut row_matches = HashMap::new();
+            for i in 0..headers.len() {
+                row_matches.insert(headers[i], r[i]);
+            }
+            //insert each entry to the final vec
+            res.push(row_matches);
+        }
+    }
+
+    res
 }
 
 fn main() {
-    let mut a = CsvParser::new("a,b\r\n\r\n1,2\r\n\r\n");
-    dbg!(&a);
-    dbg!(&a.next());
-    dbg!(&a.next());
+    const PEOPLE: &str = "name,city,age\n\
+                      ann,paris,30\n\
+                      bob,rome,25\n\
+                      cat,paris,41\n";
+
+    let result = query(PEOPLE, "City", "paris");
+
+    println!("{:?}", result);
 }
 
 // fn rows(input: &str) -> Vec<Vec<&str>> {
