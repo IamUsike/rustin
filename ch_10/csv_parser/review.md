@@ -26,11 +26,11 @@ less common input. **Low** = style, readability, small efficiency.
 
 ### 1.1 High: `query` panics on short rows and blank lines (R2, R6, R15)
 
-| Input | Call | Result |
-|---|---|---|
-| `"a,b\n\n1,2\n"` | `query(_, "b", "2")` | **panic**: index out of bounds |
-| `"a,b\n1\n1,2\n"` | `query(_, "a", "1")` | **panic** |
-| `"a,b\n1\n"` | `query(_, "b", "x")` | **panic** |
+| Input             | Call                 | Result                         |
+| ----------------- | -------------------- | ------------------------------ |
+| `"a,b\n\n1,2\n"`  | `query(_, "b", "2")` | **panic**: index out of bounds |
+| `"a,b\n1\n1,2\n"` | `query(_, "a", "1")` | **panic**                      |
+| `"a,b\n1\n"`      | `query(_, "b", "x")` | **panic**                      |
 
 **Why it happens:** `r[col_num]` (line 172) and `r[i]` (line 177) index
 the row directly. That's fine only if every row has at least as many
@@ -115,15 +115,15 @@ input.
 
 ### 1.6 Medium: a blank line before the header becomes the header (R10)
 
-| Input | Result | Expected |
-|---|---|---|
-| `"\na,b\n1,2\n"`, `headers()` | `[""]` | `["a", "b"]` |
-| `"\na,b\n1,2\n"`, rows | `[["a","b"], ["1","2"]]` | `[["1","2"]]` |
-| `"\n"`, `headers()` | `[""]` | `[]` |
+| Input                         | Result                   | Expected      |
+| ----------------------------- | ------------------------ | ------------- |
+| `"\na,b\n1,2\n"`, `headers()` | `[""]`                   | `["a", "b"]`  |
+| `"\na,b\n1,2\n"`, rows        | `[["a","b"], ["1","2"]]` | `[["1","2"]]` |
+| `"\n"`, `headers()`           | `[""]`                   | `[]`          |
 
 **Why:** `new` takes the first line as the header without checking
 whether it's blank. The blank-skipping loop (lines 43-57) runs only
-*after* the header has been read. R10 says the header is the first
+_after_ the header has been read. R10 says the header is the first
 **non-blank** line.
 
 `next` already knows how to skip blank lines. If `new` and `next` shared
@@ -258,7 +258,7 @@ The answer is half right. A `Vec` has two parts:
 
 Here the elements are `&str` values, each one a pointer plus a length (16
 bytes). So `rows` **does** allocate on the heap: an array of
-16-byte references, one per line. What it does *not* allocate is any copy
+16-byte references, one per line. What it does _not_ allocate is any copy
 of the text. The references point into `csv`.
 
 That's exactly the line the spec draws (R17): allocating `Vec`s of
@@ -268,7 +268,7 @@ zero copies of the text, not zero heap allocations.
 ### Line 173: "how does this live for as long as res? is this not if-block scoped?"
 
 The **variable** `row_matches` is scoped to the block. The **value** is
-not. `res.push(row_matches)` *moves* the `HashMap` into `res`: ownership
+not. `res.push(row_matches)` _moves_ the `HashMap` into `res`: ownership
 transfers (TRPL ch4), and the `HashMap` now belongs to `res`. When the
 block ends, the variable name goes away, but it no longer owns anything,
 so nothing is dropped. The map lives as long as `res` does.
@@ -286,16 +286,16 @@ Each bug above went unnoticed because no test covers it. Add these
 **first**, watch them fail, then fix the code. That's the same red-green
 loop as before. Suggested names and the rule each one checks:
 
-| Test | Input | Expected | Rule |
-|---|---|---|---|
-| `s05_lone_carriage_return_at_end_of_input` | `rows("a\n1\r")` | `[["1\r"]]` | R4 |
-| `s06_blank_lines_before_header_are_skipped` | `"\n\na,b\n1,2\n"` | headers `["a","b"]`, rows `[["1","2"]]` | R6, R10 |
-| `s06_only_blank_lines` | `"\n\n"` | headers `[]`, rows `[]` | R6, R12 |
-| `s10_query_crlf` | `query("a,b\r\n1,2\r\n", "b", "2")` | one match, `{"a":"1","b":"2"}` | R3 |
-| `s10_query_skips_blank_lines` | `query("a,b\n\n1,2\n\n", "b", "2")` | one match, no panic | R2, R6 |
-| `s10_query_blank_line_does_not_match_empty_value` | `query("a\n1\n\n", "a", "")` | `[]` | R6 |
-| `s10_query_short_row_does_not_panic` | `query("a,b\n1\n1,2\n", "b", "2")` | one match: the `1,2` row | R2, R15 |
-| `s10_query_column_missing_in_short_row` | `query("a,b\n1\n", "b", "x")` | `[]` | R2 |
+| Test                                              | Input                               | Expected                                | Rule    |
+| ------------------------------------------------- | ----------------------------------- | --------------------------------------- | ------- |
+| `s05_lone_carriage_return_at_end_of_input`        | `rows("a\n1\r")`                    | `[["1\r"]]`                             | R4      |
+| `s06_blank_lines_before_header_are_skipped`       | `"\n\na,b\n1,2\n"`                  | headers `["a","b"]`, rows `[["1","2"]]` | R6, R10 |
+| `s06_only_blank_lines`                            | `"\n\n"`                            | headers `[]`, rows `[]`                 | R6, R12 |
+| `s10_query_crlf`                                  | `query("a,b\r\n1,2\r\n", "b", "2")` | one match, `{"a":"1","b":"2"}`          | R3      |
+| `s10_query_skips_blank_lines`                     | `query("a,b\n\n1,2\n\n", "b", "2")` | one match, no panic                     | R2, R6  |
+| `s10_query_blank_line_does_not_match_empty_value` | `query("a\n1\n\n", "a", "")`        | `[]`                                    | R6      |
+| `s10_query_short_row_does_not_panic`              | `query("a,b\n1\n1,2\n", "b", "2")`  | one match: the `1,2` row                | R2, R15 |
+| `s10_query_column_missing_in_short_row`           | `query("a,b\n1\n", "b", "x")`       | `[]`                                    | R2      |
 
 A broader, optional check: a property test (`proptest` crate) that feeds
 random strings into `rows` and `query` and asserts only "doesn't panic".
