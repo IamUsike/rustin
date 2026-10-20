@@ -25,7 +25,7 @@ impl TokenBucket {
 impl Limiter for TokenBucket {
     //refilling the bucket and then validate
     //cos shi is done lazily. whenever a req comes
-    //after a while and the bucket is empty, it should
+    //and the bucket is empty(but refilled_cap > 0), it should
     //first be filled by the time elapsed and then validated.
     fn try_acquire(&mut self, now: Instant) -> bool {
         //cant directly multiply Instant with f64 for multiply by 1 sec and then add it
@@ -46,6 +46,64 @@ impl Limiter for TokenBucket {
         }
 
         false
+    }
+}
+
+pub struct SlidingWindowCounter {
+    limit: u32,
+    window: Duration,
+    pre_win_reqs: u32,
+    cur_win_reqs: u32,
+    cur_win_start: Instant,
+    prev_win_end: Instant,
+}
+
+impl SlidingWindowCounter {
+    pub fn new(limit: u32, window: Duration, now: Instant) -> Self {
+        Self {
+            limit,
+            window,
+            cur_win_start: now,
+            prev_win_end: now, //doesnt matter even if now -1 cos req = 0
+            cur_win_reqs: 0,
+            pre_win_reqs: 0,
+        }
+    }
+}
+
+impl Limiter for SlidingWindowCounter {
+    fn try_acquire(&mut self, now: Instant) -> bool {
+        //check the the window has expired
+        if now > self.cur_win_start + self.window {
+            self.prev_win_end = self.cur_win_start + self.window;
+            self.pre_win_reqs = self.cur_win_reqs;
+            self.cur_win_reqs = 0;
+            self.cur_win_start = now;
+        }
+
+        if self.cur_win_reqs + 1 > self.limit {
+            return false;
+        }
+
+        //no intermittent traffic ie: win A has traffic, win B => NO traffic, win C => traffic
+        //wipe out the prev window in this case
+        if self.prev_win_end + self.window > self.cur_win_start {
+            self.pre_win_reqs = 0;
+        }
+
+        //time elaped in cw
+        let t0 = now - self.cur_win_start;
+        let fraction_time = t0.as_secs_f64() / self.window.as_secs_f64();
+        //no. of reqs allowed in the cur. sliding window
+        let estimate = (1.0 - fraction_time) * self.pre_win_reqs as f64 + self.cur_win_reqs as f64;
+
+        if self.cur_win_reqs as f64 + 1.0 > estimate {
+            return false;
+        }
+
+        self.cur_win_reqs += 1;
+
+        true
     }
 }
 
