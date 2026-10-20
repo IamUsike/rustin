@@ -49,11 +49,11 @@ impl Limiter for TokenBucket {
 
         self.last_used = now;
 
+        //if cur cap is < 1. just ignore it, no point making it 0 ig
+        //i mean it could still be 1 req upar neeche but f it.
+        //or else one more if statement and make it 0
         if self.cur_capacity >= 1.0 {
             self.cur_capacity -= 1.0;
-            //cur capacity shouldn't go negative
-            self.cur_capacity = self.cur_capacity.max(0.0);
-            println!("returning true");
             return true;
         }
 
