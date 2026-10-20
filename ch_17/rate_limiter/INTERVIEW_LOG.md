@@ -93,6 +93,15 @@ Other algorithms to know: **fixed window counter** (simplest, allows 2× bursts 
 | Where do rules live (no redeploy)? | A config file on disk, reloaded dynamically. | Close. With 8 limiter pods, "on disk" means 8 disks to keep in sync. Use a **Kubernetes ConfigMap** mounted as `rules.toml` in every pod. The pod watches the file (or polls it) and atomically swaps the in-memory rules. The alternative is rules stored in Redis/a config service, polled every few seconds. |
 | What does a limited client receive? | Header `x-retry-after`. | The standard header is **`Retry-After`** (seconds, RFC 9110), with no `x-` prefix. Also send `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (or the newer IETF `RateLimit` / `RateLimit-Policy` headers). Status `429 Too Many Requests`. |
 
+### Follow-up (2026-10-20): why the L4 LB, and where TLS ends
+
+| Question | My answer | Correction |
+|---|---|---|
+| Why is there an L4 LB before the IP limiter? | (Asked by me.) | 4 limiter pods need one stable address, traffic spread across them, and health checks. DNS round-robin is cached and has no health checks. L4 only forwards TCP, so it is cheap and the least likely box to fall over. PROXY protocol passes the real client IP to the pods. |
+| Where is TLS decrypted? | "At the L4 LB… HTTP headers aren't encrypted… so at the L7 LB?" | **HTTP headers *are* encrypted.** TLS encrypts the whole HTTP message: method, path, headers, body. Only the IP/TCP headers (IPs, ports) and the SNI hostname are visible. So TLS must end **before the first component that reads HTTP**, which is the IP limiter, not the later L7 gateway. Two valid options: the L4 LB terminates TLS (cloud-managed certs, pods get plain HTTP), or TLS passthrough with the IP limiter pods terminating it (certs in pods, TLS CPU cost in pods). |
+| After decrypting at the LB, does the LB take the limiter's key and re-encrypt? Then the limiter decrypts anyway? | (My question.) | The LB never gets the limiter's key. Each hop is a **separate TLS session**: the LB opens a new TLS connection to the pod, the pod presents its own cert (from an internal CA), and the handshake makes fresh session keys. Yes, the limiter decrypts either way. So for a **pure L4 LB, re-encryption is pointless**: passthrough gives the same security with one fewer decryption. Re-encrypting is only worth it when the LB does something with the plaintext (L7 inspection, WAF) or you want public certs centralised at the LB. |
+| Final TLS choice | | **Passthrough: the IP limiter terminates TLS.** Internal hops (limiter → gateway → user limiter → app) use **mTLS**, where both sides present certs, so each service knows who is calling it. In practice a **service mesh** (Istio, Linkerd) does mTLS in sidecar proxies, and app code stays plain HTTP. Cost is fine: the handshake is the expensive part (public-key crypto), bulk data uses AES (hardware accelerated), and keep-alive connections reuse one handshake for many requests. |
+
 ---
 
 ## How the diagram changed (v1 → v2)

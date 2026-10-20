@@ -32,15 +32,156 @@ Do them in order. Each stage ends with a check you can run. Don't move on until 
 
 ### Stage 1: Algorithms in memory (std only)
 
-- Write a `TokenBucket` (capacity, refill rate, tokens, last refill) with `fn try_acquire(&mut self, now: Instant) -> bool`. Refill lazily.
-- Write a `SlidingWindowCounter` (window, limit, prev count, current count, current window start) with the same method. Use `count = cur + prev * (1 - elapsed / window)`.
-- Both have the same method signature, so a trait `Limiter` with 2 implementations is justified here (TRPL ch 10/18).
-- Pass `now` in as an argument instead of calling `Instant::now()` inside, so tests can fake time.
+Build these to exactly this API so the tests below compile:
 
-**Check:** unit tests for each.
-- A bucket of capacity 5 allows 5 calls and rejects the 6th.
-- After waiting refill time, it allows again.
-- The sliding window counter rejects once `limit` is reached, and the weighted previous window counts.
+```rust
+pub trait Limiter {
+    fn try_acquire(&mut self, now: Instant) -> bool;
+}
+
+impl TokenBucket {
+    pub fn new(capacity: u32, refill_per_sec: f64, now: Instant) -> Self;
+}
+
+impl SlidingWindowCounter {
+    pub fn new(limit: u32, window: Duration, now: Instant) -> Self;
+}
+```
+
+Rules the tests assume:
+
+- **TokenBucket** starts full. It refills lazily, at `refill_per_sec` tokens per second, inside `try_acquire`. Tokens are fractional, so half a token is kept and not lost. Tokens never go above `capacity`.
+- **SlidingWindowCounter**: windows are aligned to the `now` passed to `new`, so they are `[t0, t0+w)`, `[t0+w, t0+2w)` and so on. A request is allowed if `cur + prev * (1 - elapsed_in_cur / w) < limit`, and then `cur += 1`. Rejected requests are not counted. Traffic older than the previous window is forgotten.
+- `now` is passed in instead of calling `Instant::now()` inside, so tests can fake time.
+
+**Check:** paste this at the bottom of the file that defines the limiters, then run `cargo test`. All 12 must pass.
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    fn sec(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    // Calls try_acquire `tries` times at the same instant, returns how many were allowed.
+    fn count_allowed(l: &mut impl Limiter, now: Instant, tries: u32) -> u32 {
+        (0..tries).filter(|_| l.try_acquire(now)).count() as u32
+    }
+
+    // ---------- TokenBucket ----------
+
+    #[test]
+    fn bucket_starts_full_and_rejects_when_empty() {
+        let t0 = Instant::now();
+        let mut b = TokenBucket::new(5, 1.0, t0);
+        assert_eq!(count_allowed(&mut b, t0, 10), 5);
+    }
+
+    #[test]
+    fn bucket_refills_over_time() {
+        let t0 = Instant::now();
+        let mut b = TokenBucket::new(5, 1.0, t0);
+        count_allowed(&mut b, t0, 5);
+        assert_eq!(count_allowed(&mut b, t0 + sec(1), 10), 1);
+        assert_eq!(count_allowed(&mut b, t0 + sec(3), 10), 2);
+    }
+
+    #[test]
+    fn bucket_keeps_partial_tokens() {
+        let t0 = Instant::now();
+        let mut b = TokenBucket::new(5, 1.0, t0);
+        count_allowed(&mut b, t0, 5);
+        assert!(!b.try_acquire(t0 + ms(500))); // half a token: not enough
+        assert!(b.try_acquire(t0 + ms(1000))); // that half must not be thrown away
+    }
+
+    #[test]
+    fn bucket_never_exceeds_capacity() {
+        let t0 = Instant::now();
+        let mut b = TokenBucket::new(5, 1.0, t0);
+        assert_eq!(count_allowed(&mut b, t0 + sec(3600), 100), 5);
+    }
+
+    #[test]
+    fn bucket_fractional_refill_rate() {
+        let t0 = Instant::now();
+        let mut b = TokenBucket::new(2, 0.5, t0); // 1 token every 2 seconds
+        count_allowed(&mut b, t0, 2);
+        assert_eq!(count_allowed(&mut b, t0 + sec(1), 5), 0);
+        assert_eq!(count_allowed(&mut b, t0 + sec(2), 5), 1);
+    }
+
+    // ---------- SlidingWindowCounter ----------
+
+    #[test]
+    fn window_allows_limit_then_rejects() {
+        let t0 = Instant::now();
+        let mut w = SlidingWindowCounter::new(10, sec(60), t0);
+        assert_eq!(count_allowed(&mut w, t0, 20), 10);
+    }
+
+    #[test]
+    fn window_start_of_next_window_still_full() {
+        // at exactly t=60s the previous window has weight 1.0
+        let t0 = Instant::now();
+        let mut w = SlidingWindowCounter::new(10, sec(60), t0);
+        count_allowed(&mut w, t0, 10);
+        assert_eq!(count_allowed(&mut w, t0 + sec(60), 10), 0);
+    }
+
+    #[test]
+    fn window_weights_previous_window() {
+        // halfway into window 1: estimate = cur + 10 * 0.5 = cur + 5
+        let t0 = Instant::now();
+        let mut w = SlidingWindowCounter::new(10, sec(60), t0);
+        count_allowed(&mut w, t0, 10);
+        assert_eq!(count_allowed(&mut w, t0 + sec(90), 20), 5);
+    }
+
+    #[test]
+    fn window_weight_uses_position_in_current_window() {
+        // 15s into window 1: weight 0.75, estimate = cur + 7.5, so cur 0, 1, 2 pass
+        let t0 = Instant::now();
+        let mut w = SlidingWindowCounter::new(10, sec(60), t0);
+        count_allowed(&mut w, t0 + sec(10), 5);
+        count_allowed(&mut w, t0 + sec(50), 5);
+        assert_eq!(count_allowed(&mut w, t0 + sec(75), 20), 3);
+    }
+
+    #[test]
+    fn window_rejected_requests_do_not_count() {
+        let t0 = Instant::now();
+        let mut w = SlidingWindowCounter::new(10, sec(60), t0);
+        assert_eq!(count_allowed(&mut w, t0, 15), 10); // 5 rejected
+        assert_eq!(count_allowed(&mut w, t0 + sec(90), 20), 5); // prev is 10, not 15
+    }
+
+    #[test]
+    fn window_forgets_traffic_two_windows_old() {
+        // at t=125s, current window is [120, 180), previous [60, 120) was empty
+        let t0 = Instant::now();
+        let mut w = SlidingWindowCounter::new(10, sec(60), t0);
+        count_allowed(&mut w, t0, 10);
+        assert_eq!(count_allowed(&mut w, t0 + sec(125), 20), 10);
+    }
+
+    #[test]
+    fn window_skips_idle_windows_without_drift() {
+        // idle for many windows, then traffic: windows must stay aligned to t0
+        let t0 = Instant::now();
+        let mut w = SlidingWindowCounter::new(10, sec(60), t0);
+        count_allowed(&mut w, t0 + sec(600), 10); // window [600, 660)
+        assert_eq!(count_allowed(&mut w, t0 + sec(690), 20), 5); // halfway into [660, 720)
+    }
+}
+```
 
 ### Stage 2: Concurrent, per key (tokio)
 
