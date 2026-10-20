@@ -81,7 +81,8 @@ mod tests {
     fn bucket_starts_full_and_rejects_when_empty() {
         let t0 = Instant::now();
         let mut b = TokenBucket::new(5, 1.0, t0);
-        assert_eq!(count_allowed(&mut b, t0, 10), 5);
+
+        assert_eq!(count_allowed(&mut b, t1, 10), 5);
     }
 
     #[test]

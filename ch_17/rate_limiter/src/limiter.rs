@@ -4,6 +4,7 @@ pub trait Limiter {
     fn try_acquire(&mut self, now: Instant) -> bool;
 }
 
+#[derive(Debug)]
 pub struct TokenBucket {
     capacity: u32,
     refill_per_sec: f64,
@@ -28,20 +29,31 @@ impl Limiter for TokenBucket {
     //and the bucket is empty(but refilled_cap > 0), it should
     //first be filled by the time elapsed and then validated.
     fn try_acquire(&mut self, now: Instant) -> bool {
-        //cant directly multiply Instant with f64 for multiply by 1 sec and then add it
-        let refilled_cap =
-            (now - self.last_used) + Duration::from_secs(1).mul_f64(self.refill_per_sec);
+        let mut refilled_cap = Duration::from_secs(0);
+
+        //lazy refil karke ka capacity?... hmm
+        let elapsed = now.duration_since(self.last_used);
+        if !elapsed.is_zero() {
+            refilled_cap = (now - self.last_used).mul_f64(self.refill_per_sec);
+        }
 
         //refill lazily. ie: just read the below code bro
         // self.cur_capacity = self.capacity.min(refilled_cap) as f64;
-        if Duration::from_secs(self.capacity as u64) < refilled_cap {
+        if Duration::from_secs(self.capacity as u64)
+            < refilled_cap + Duration::from_secs_f64(self.cur_capacity)
+        {
             self.cur_capacity = self.capacity as f64;
         } else {
-            self.cur_capacity = refilled_cap.as_secs_f64();
+            self.cur_capacity += refilled_cap.as_secs_f64();
         }
 
-        if self.cur_capacity > 0.0 {
+        self.last_used = now;
+
+        if self.cur_capacity >= 1.0 {
             self.cur_capacity -= 1.0;
+            //cur capacity shouldn't go negative
+            self.cur_capacity = self.cur_capacity.max(0.0);
+            println!("returning true");
             return true;
         }
 
@@ -131,6 +143,8 @@ mod tests {
     fn bucket_starts_full_and_rejects_when_empty() {
         let t0 = Instant::now();
         let mut b = TokenBucket::new(5, 1.0, t0);
+        dbg!("bucket nigs");
+        dbg!(&b);
         assert_eq!(count_allowed(&mut b, t0, 10), 5);
     }
 
