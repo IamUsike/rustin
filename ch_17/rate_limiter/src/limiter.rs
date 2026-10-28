@@ -85,7 +85,7 @@ impl SlidingWindowCounter {
 
 impl Limiter for SlidingWindowCounter {
     fn try_acquire(&mut self, now: Instant) -> bool {
-        //check the the window has expired
+        // Check if the window has expired
         if now > self.cur_win_start + self.window {
             self.prev_win_end = self.cur_win_start + self.window;
             self.pre_win_reqs = self.cur_win_reqs;
@@ -93,23 +93,28 @@ impl Limiter for SlidingWindowCounter {
             self.cur_win_start = now;
         }
 
-        if self.cur_win_reqs + 1 > self.limit {
-            return false;
-        }
-
-        //no intermittent traffic ie: win A has traffic, win B => NO traffic, win C => traffic
-        //wipe out the prev window in this case
-        if self.prev_win_end + self.window > self.cur_win_start {
+        // no intermittent traffic ie: win A has traffic, win B => NO traffic, win C => traffic
+        // Wipe out the prev window in this case
+        if self.prev_win_end + self.window < self.cur_win_start {
             self.pre_win_reqs = 0;
         }
 
-        //time elaped in cw
-        let t0 = now - self.cur_win_start;
-        let fraction_time = t0.as_secs_f64() / self.window.as_secs_f64();
-        //no. of reqs allowed in the cur. sliding window
+        // if e secs have passed in the cur win
+        // estimate = (window - e)/window * prev_win_reqs + cur_win_reqs;
+
+        // time elapsed in cw
+        let t0 = (now - self.prev_win_end).as_secs_f64();
+
+        // in case the prev window didnt have any req, hmm in hindsight
+        // even without this, the code should work fine cos in that case
+        // prev win reqs == 0 => estimate ka first half == 0
+        // t0 = t0.min(self.window.as_secs_f64());
+
+        let fraction_time = t0 / self.window.as_secs_f64();
+        // no. of reqs allowed in the cur. sliding window
         let estimate = (1.0 - fraction_time) * self.pre_win_reqs as f64 + self.cur_win_reqs as f64;
 
-        if self.cur_win_reqs as f64 + 1.0 > estimate {
+        if estimate >= self.limit as f64 {
             return false;
         }
 
@@ -243,5 +248,27 @@ mod tests {
         let mut w = SlidingWindowCounter::new(10, sec(60), t0);
         count_allowed(&mut w, t0 + sec(600), 10); // window [600, 660)
         assert_eq!(count_allowed(&mut w, t0 + sec(690), 20), 5); // halfway into [660, 720)
+    }
+
+    #[test]
+    fn window_late_first_request_does_not_shift_windows() {
+        // windows stay [0,60) [60,120) [120,180) no matter when requests arrive
+        let t0 = Instant::now();
+        let mut w = SlidingWindowCounter::new(10, sec(60), t0);
+        assert_eq!(count_allowed(&mut w, t0 + sec(59), 10), 10); // [0,60) = 10
+        // t=100: 40s into [60,120), prev weight 1/3, estimate = cur + 3.33
+        assert_eq!(count_allowed(&mut w, t0 + sec(100), 20), 7);
+        // t=150: 30s into [120,180), prev = 7 (from [60,120)), weight 0.5, estimate = cur + 3.5
+        assert_eq!(count_allowed(&mut w, t0 + sec(150), 20), 7);
+    }
+
+    #[test]
+    fn bucket_out_of_order_timestamps_do_not_mint_tokens() {
+        // Stage 2 preview: with many tasks, an older `now` can arrive after a newer one
+        let t0 = Instant::now();
+        let mut b = TokenBucket::new(5, 1.0, t0);
+        count_allowed(&mut b, t0 + sec(10), 5); // drained at t=10
+        b.try_acquire(t0 + sec(9)); // late, older timestamp
+        assert_eq!(count_allowed(&mut b, t0 + sec(10), 5), 0); // no time passed since t=10
     }
 }

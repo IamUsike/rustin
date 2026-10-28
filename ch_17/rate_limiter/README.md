@@ -54,7 +54,7 @@ Rules the tests assume:
 - **SlidingWindowCounter**: windows are aligned to the `now` passed to `new`, so they are `[t0, t0+w)`, `[t0+w, t0+2w)` and so on. A request is allowed if `cur + prev * (1 - elapsed_in_cur / w) < limit`, and then `cur += 1`. Rejected requests are not counted. Traffic older than the previous window is forgotten.
 - `now` is passed in instead of calling `Instant::now()` inside, so tests can fake time.
 
-**Check:** paste this at the bottom of the file that defines the limiters, then run `cargo test`. All 12 must pass.
+**Check:** paste this at the bottom of the file that defines the limiters, then run `cargo test`. All 14 must pass.
 
 ```rust
 #[cfg(test)]
@@ -180,6 +180,28 @@ mod tests {
         let mut w = SlidingWindowCounter::new(10, sec(60), t0);
         count_allowed(&mut w, t0 + sec(600), 10); // window [600, 660)
         assert_eq!(count_allowed(&mut w, t0 + sec(690), 20), 5); // halfway into [660, 720)
+    }
+
+    #[test]
+    fn window_late_first_request_does_not_shift_windows() {
+        // windows stay [0,60) [60,120) [120,180) no matter when requests arrive
+        let t0 = Instant::now();
+        let mut w = SlidingWindowCounter::new(10, sec(60), t0);
+        assert_eq!(count_allowed(&mut w, t0 + sec(59), 10), 10); // [0,60) = 10
+        // t=100: 40s into [60,120), prev weight 1/3, estimate = cur + 3.33
+        assert_eq!(count_allowed(&mut w, t0 + sec(100), 20), 7);
+        // t=150: 30s into [120,180), prev = 7 (from [60,120)), weight 0.5, estimate = cur + 3.5
+        assert_eq!(count_allowed(&mut w, t0 + sec(150), 20), 7);
+    }
+
+    #[test]
+    fn bucket_out_of_order_timestamps_do_not_mint_tokens() {
+        // Stage 2 preview: with many tasks, an older `now` can arrive after a newer one
+        let t0 = Instant::now();
+        let mut b = TokenBucket::new(5, 1.0, t0);
+        count_allowed(&mut b, t0 + sec(10), 5); // drained at t=10
+        b.try_acquire(t0 + sec(9)); // late, older timestamp
+        assert_eq!(count_allowed(&mut b, t0 + sec(10), 5), 0); // no time passed since t=10
     }
 }
 ```
