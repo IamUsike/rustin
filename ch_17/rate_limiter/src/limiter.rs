@@ -90,12 +90,17 @@ impl Limiter for SlidingWindowCounter {
             self.prev_win_end = self.cur_win_start + self.window;
             self.pre_win_reqs = self.cur_win_reqs;
             self.cur_win_reqs = 0;
-            self.cur_win_start = now;
+
+            //window be rolling in multiples of `window`
+            let time_elapsed = now - self.prev_win_end;
+            let windows_elapsed = time_elapsed.as_secs_f64() / self.window.as_secs_f64();
+            self.cur_win_start = self.prev_win_end
+                + Duration::from_secs_f64(windows_elapsed.floor() * self.window.as_secs_f64());
         }
 
         // no intermittent traffic ie: win A has traffic, win B => NO traffic, win C => traffic
         // Wipe out the prev window in this case
-        if self.prev_win_end + self.window < self.cur_win_start {
+        if self.prev_win_end + self.window <= self.cur_win_start {
             self.pre_win_reqs = 0;
         }
 
