@@ -31,7 +31,7 @@ impl Limiter for TokenBucket {
     fn try_acquire(&mut self, now: Instant) -> bool {
         let mut refilled_cap = Duration::from_secs(0);
 
-        //lazy refil karke ka capacity?... hmm
+        //lazy refil karne ka capacity?... hmm
         let elapsed = now.duration_since(self.last_used);
         if !elapsed.is_zero() {
             refilled_cap = (now - self.last_used).mul_f64(self.refill_per_sec);
@@ -47,7 +47,8 @@ impl Limiter for TokenBucket {
             self.cur_capacity += refilled_cap.as_secs_f64();
         }
 
-        self.last_used = now;
+        //read the last test case
+        self.last_used = self.last_used.max(now);
 
         //if cur cap is < 1. just ignore it, no point making it 0 ig
         //i mean it could still be 1 req upar neeche but f it.

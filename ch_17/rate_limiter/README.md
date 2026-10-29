@@ -208,11 +208,118 @@ mod tests {
 
 ### Stage 2: Concurrent, per key (tokio)
 
-- Wrap the limiters in `HashMap<String, TokenBucket>` behind `Arc<Mutex<...>>`. The key is the IP or user ID.
-- Spawn many tasks that hit the same key concurrently.
-- Question to answer in a comment: `std::sync::Mutex` or `tokio::sync::Mutex`? Why? (See your mini-redis `shared_state` notes.)
+One limiter per key (IP or user ID), shared by many tokio tasks.
 
-**Check:** 100 tasks hit one key with limit 10. Exactly 10 succeed.
+Setup: in `Cargo.toml`, set `tokio = { version = "1", features = ["full"] }`. The tests need the `macros` and `rt-multi-thread` features.
+
+Build this in `src/keyed.rs`, then add `mod keyed; pub use keyed::RateLimiter;` to `lib.rs`:
+
+```rust
+pub struct RateLimiter<L> {
+    // a Mutex around a HashMap<String, L>
+    // a boxed closure that builds a new L for a key seen for the first time:
+    //     Box<dyn Fn(Instant) -> L + Send + Sync>
+}
+
+impl<L: Limiter> RateLimiter<L> {
+    pub fn new(make: impl Fn(Instant) -> L + Send + Sync + 'static) -> Self;
+    pub fn check(&self, key: &str) -> bool;   // a normal fn, not async
+}
+```
+
+Rules the tests assume:
+
+- `check` creates the key's limiter on first use with `make(now)`, then calls `try_acquire(now)`.
+- Read `Instant::now()` **while holding the lock**. Stage 1's last test explains why.
+- `check` takes `&self`, not `&mut self`. That's the point of the Mutex: an `Arc<RateLimiter<_>>` gets shared across tasks, and they can't each get `&mut`.
+
+Questions to answer in comments:
+
+1. `std::sync::Mutex` or `tokio::sync::Mutex`? Why? (See your mini-redis `shared_state` notes. Hint: is there an `.await` while the lock is held?)
+2. Why must the closure be `Send + Sync + 'static`? What breaks if you remove each one?
+3. Why `Box<dyn Fn>` instead of a second generic parameter `F`? (TRPL ch 18. Think about how long the type name gets when Stage 3 stores this in axum `State`.)
+4. The map never removes keys. What happens with 10M users? How would you fix it? (Don't fix it yet. In Stage 4, Redis TTLs do it for you.)
+
+**Check:** paste this at the bottom of `src/keyed.rs` and run `cargo test`. All 5 must pass, plus the 14 from Stage 1.
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{SlidingWindowCounter, TokenBucket};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    // Spawns `tasks` tokio tasks that all call `check(key)` once. Returns how many were allowed.
+    async fn hammer<L: Limiter + Send + 'static>(rl: &Arc<RateLimiter<L>>, key: &str, tasks: u32) -> u32 {
+        let handles: Vec<_> = (0..tasks)
+            .map(|_| {
+                let rl = Arc::clone(rl);
+                let key = key.to_string();
+                tokio::spawn(async move { rl.check(&key) })
+            })
+            .collect();
+
+        let mut allowed = 0;
+        for h in handles {
+            if h.await.unwrap() {
+                allowed += 1;
+            }
+        }
+        allowed
+    }
+
+    // Refill so slow it never adds a token during a test.
+    fn bucket_of_10() -> RateLimiter<TokenBucket> {
+        RateLimiter::new(|now| TokenBucket::new(10, 0.000_001, now))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn one_key_many_tasks_exactly_limit_pass() {
+        let rl = Arc::new(bucket_of_10());
+        assert_eq!(hammer(&rl, "1.2.3.4", 100).await, 10);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn keys_are_independent() {
+        let rl = Arc::new(bucket_of_10());
+        assert_eq!(hammer(&rl, "alice", 50).await, 10);
+        assert_eq!(hammer(&rl, "bob", 50).await, 10); // alice's traffic must not touch bob
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn many_keys_at_once() {
+        // 50 keys hammered concurrently, 20 tasks each: every key gets exactly 10
+        let rl = Arc::new(bucket_of_10());
+        let handles: Vec<_> = (0..50)
+            .map(|i| {
+                let rl = Arc::clone(&rl);
+                tokio::spawn(async move { hammer(&rl, &format!("user-{i}"), 20).await })
+            })
+            .collect();
+
+        for h in handles {
+            assert_eq!(h.await.unwrap(), 10);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn works_with_sliding_window_too() {
+        let rl = Arc::new(RateLimiter::new(|now| {
+            SlidingWindowCounter::new(10, Duration::from_secs(60), now)
+        }));
+        assert_eq!(hammer(&rl, "1.2.3.4", 100).await, 10);
+    }
+
+    #[test]
+    fn plain_sync_call_works() {
+        // check() is a normal fn: no runtime needed to use it
+        let rl = bucket_of_10();
+        let allowed = (0..15).filter(|_| rl.check("k")).count();
+        assert_eq!(allowed, 10);
+    }
+}
+```
 
 ### Stage 3: HTTP middleware (axum)
 
