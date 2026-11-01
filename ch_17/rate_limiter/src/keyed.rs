@@ -16,17 +16,18 @@ impl<L: Limiter> RateLimiter<L> {
     }
 
     pub fn check(&self, key: &str) -> bool {
-        let mut map = self.limiters.lock().unwrap();
+        //im case a thread holding locks panics. it will return Err to all th other
+        //threads that are waiting on that lock
+        let mut map = match self.limiters.lock() {
+            Ok(guard) => guard,
+            Err(poison_err) => poison_err.into_inner(),
+        };
+
         let now = Instant::now();
 
-        //if the particular key doesnt exist create a new entry
-        //in the hashmap
-        if !map.contains_key(key) {
-            let limiter = (self.make)(now);
-            map.insert(key.to_string(), limiter);
-        }
-
-        map.get_mut(key).unwrap().try_acquire(now)
+        map.entry(key.to_string())
+            .or_insert_with(|| (self.make)(now))
+            .try_acquire(now)
     }
 }
 
@@ -131,5 +132,22 @@ mod tests {
         let rl = bucket_of_10();
         let allowed = (0..15).filter(|_| rl.check("k")).count();
         assert_eq!(allowed, 10);
+    }
+
+    #[test]
+    fn make_runs_once_per_new_key() {
+        // the recipe builds a limiter only for keys never seen before
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&calls);
+        let rl = RateLimiter::new(move |now| {
+            c.fetch_add(1, Ordering::SeqCst);
+            TokenBucket::new(10, 0.000_001, now)
+        });
+        for _ in 0..5 {
+            rl.check("a");
+            rl.check("b");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

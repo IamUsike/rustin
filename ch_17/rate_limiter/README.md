@@ -240,7 +240,7 @@ Questions to answer in comments:
 3. Why `Box<dyn Fn>` instead of a second generic parameter `F`? (TRPL ch 18. Think about how long the type name gets when Stage 3 stores this in axum `State`.)
 4. The map never removes keys. What happens with 10M users? How would you fix it? (Don't fix it yet. In Stage 4, Redis TTLs do it for you.)
 
-**Check:** paste this at the bottom of `src/keyed.rs` and run `cargo test`. All 5 must pass, plus the 14 from Stage 1.
+**Check:** paste this at the bottom of `src/keyed.rs` and run `cargo test`. All 6 must pass, plus the 14 from Stage 1.
 
 ```rust
 #[cfg(test)]
@@ -317,6 +317,22 @@ mod tests {
         let rl = bucket_of_10();
         let allowed = (0..15).filter(|_| rl.check("k")).count();
         assert_eq!(allowed, 10);
+    }
+    #[test]
+    fn make_runs_once_per_new_key() {
+        // the recipe builds a limiter only for keys never seen before
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&calls);
+        let rl = RateLimiter::new(move |now| {
+            c.fetch_add(1, Ordering::SeqCst);
+            TokenBucket::new(10, 0.000_001, now)
+        });
+        for _ in 0..5 {
+            rl.check("a");
+            rl.check("b");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }
 ```
